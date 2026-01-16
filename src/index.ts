@@ -13,21 +13,48 @@ import axios, { AxiosInstance, AxiosError } from "axios";
 const SAILPOINT_BASE_URL = process.env.SAILPOINT_BASE_URL || "";
 const SAILPOINT_CLIENT_ID = process.env.SAILPOINT_CLIENT_ID || "";
 const SAILPOINT_CLIENT_SECRET = process.env.SAILPOINT_CLIENT_SECRET || "";
+const SAILPOINT_API_VERSION = process.env.SAILPOINT_API_VERSION || "v3"; // v3 or v2025
 
 // Token cache
 let accessToken: string | null = null;
 let tokenExpiry: number = 0;
 
-// Create axios instance
-const createApiClient = async (): Promise<AxiosInstance> => {
+// Singleton axios instance with connection pooling
+let apiClient: AxiosInstance | null = null;
+
+// Create or get cached axios instance with connection pooling
+const getApiClient = async (): Promise<AxiosInstance> => {
+  // Update token if needed
   const token = await getAccessToken();
-  return axios.create({
-    baseURL: SAILPOINT_BASE_URL,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-  });
+
+  // Create singleton instance with connection pooling
+  if (!apiClient) {
+    apiClient = axios.create({
+      baseURL: SAILPOINT_BASE_URL,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      // Enable HTTP Keep-Alive for connection pooling
+      httpAgent: new (await import('http')).Agent({
+        keepAlive: true,
+        keepAliveMsecs: 30000,
+        maxSockets: 50,
+        maxFreeSockets: 10
+      }),
+      httpsAgent: new (await import('https')).Agent({
+        keepAlive: true,
+        keepAliveMsecs: 30000,
+        maxSockets: 50,
+        maxFreeSockets: 10
+      }),
+      timeout: 30000, // 30 second timeout
+    });
+  }
+
+  // Update authorization header with current token
+  apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+  return apiClient;
 };
 
 // OAuth2 token management
@@ -82,6 +109,29 @@ function formatError(error: unknown): string {
     return `HTTP ${axiosError.response?.status}: ${axiosError.message}`;
   }
   return String(error);
+}
+
+// Helper to validate credentials before making API calls
+function validateCredentials(): void {
+  const missingVars: string[] = [];
+
+  if (!SAILPOINT_BASE_URL) {
+    missingVars.push("SAILPOINT_BASE_URL");
+  }
+  if (!SAILPOINT_CLIENT_ID) {
+    missingVars.push("SAILPOINT_CLIENT_ID");
+  }
+  if (!SAILPOINT_CLIENT_SECRET) {
+    missingVars.push("SAILPOINT_CLIENT_SECRET");
+  }
+
+  if (missingVars.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missingVars.join(", ")}. ` +
+      `Please set SAILPOINT_BASE_URL to your tenant API URL (e.g., https://acme.api.identitynow.com), ` +
+      `and SAILPOINT_CLIENT_ID and SAILPOINT_CLIENT_SECRET from your SailPoint tenant Personal Access Token.`
+    );
+  }
 }
 
 // Define tools
@@ -925,7 +975,15 @@ async function handleTool(
   name: string,
   args: Record<string, unknown>
 ): Promise<unknown> {
-  const api = await createApiClient();
+  // Validate credentials when a tool is actually called
+  validateCredentials();
+
+  const api = await getApiClient();
+
+  // Helper to get API path with correct version
+  const apiPath = (path: string): string => {
+    return path.replace("/v3/", `/${SAILPOINT_API_VERSION}/`);
+  };
 
   switch (name) {
     // Identities
@@ -936,12 +994,12 @@ async function handleTool(
       if (args.filters) params.filters = args.filters as string;
       if (args.sorters) params.sorters = args.sorters as string;
 
-      const response = await api.get("/v3/public-identities", { params });
+      const response = await api.get(apiPath("/v3/public-identities"), { params });
       return response.data;
     }
 
     case "get_identity": {
-      const response = await api.get(`/v3/public-identities/${args.id}`);
+      const response = await api.get(apiPath(`/v3/public-identities/${args.id}`));
       return response.data;
     }
 
@@ -953,12 +1011,12 @@ async function handleTool(
       if (args.filters) params.filters = args.filters as string;
       if (args.sorters) params.sorters = args.sorters as string;
 
-      const response = await api.get("/v3/accounts", { params });
+      const response = await api.get(apiPath("/v3/accounts"), { params });
       return response.data;
     }
 
     case "get_account": {
-      const response = await api.get(`/v3/accounts/${args.id}`);
+      const response = await api.get(apiPath(`/v3/accounts/${args.id}`));
       return response.data;
     }
 
@@ -968,24 +1026,24 @@ async function handleTool(
       if (args.offset) params.offset = args.offset as number;
 
       const response = await api.get(
-        `/v3/accounts/${args.accountId}/entitlements`,
+        apiPath(`/v3/accounts/${args.accountId}/entitlements`),
         { params }
       );
       return response.data;
     }
 
     case "enable_account": {
-      const response = await api.post(`/v3/accounts/${args.id}/enable`);
+      const response = await api.post(apiPath(`/v3/accounts/${args.id}/enable`));
       return response.data;
     }
 
     case "disable_account": {
-      const response = await api.post(`/v3/accounts/${args.id}/disable`);
+      const response = await api.post(apiPath(`/v3/accounts/${args.id}/disable`));
       return response.data;
     }
 
     case "unlock_account": {
-      const response = await api.post(`/v3/accounts/${args.id}/unlock`);
+      const response = await api.post(apiPath(`/v3/accounts/${args.id}/unlock`));
       return response.data;
     }
 
@@ -998,12 +1056,12 @@ async function handleTool(
       if (args.sorters) params.sorters = args.sorters as string;
       if (args.forSubadmin) params["for-subadmin"] = args.forSubadmin as string;
 
-      const response = await api.get("/v3/access-profiles", { params });
+      const response = await api.get(apiPath("/v3/access-profiles"), { params });
       return response.data;
     }
 
     case "get_access_profile": {
-      const response = await api.get(`/v3/access-profiles/${args.id}`);
+      const response = await api.get(apiPath(`/v3/access-profiles/${args.id}`));
       return response.data;
     }
 
@@ -1022,7 +1080,7 @@ async function handleTool(
         }));
       }
 
-      const response = await api.post("/v3/access-profiles", body);
+      const response = await api.post(apiPath("/v3/access-profiles"), body);
       return response.data;
     }
 
@@ -1035,12 +1093,12 @@ async function handleTool(
       if (args.sorters) params.sorters = args.sorters as string;
       if (args.forSubadmin) params["for-subadmin"] = args.forSubadmin as string;
 
-      const response = await api.get("/v3/roles", { params });
+      const response = await api.get(apiPath("/v3/roles"), { params });
       return response.data;
     }
 
     case "get_role": {
-      const response = await api.get(`/v3/roles/${args.id}`);
+      const response = await api.get(apiPath(`/v3/roles/${args.id}`));
       return response.data;
     }
 
@@ -1050,7 +1108,7 @@ async function handleTool(
       if (args.offset) params.offset = args.offset as number;
 
       const response = await api.get(
-        `/v3/roles/${args.roleId}/assigned-identities`,
+        apiPath(`/v3/roles/${args.roleId}/assigned-identities`),
         { params }
       );
       return response.data;
@@ -1070,7 +1128,7 @@ async function handleTool(
         }));
       }
 
-      const response = await api.post("/v3/roles", body);
+      const response = await api.post(apiPath("/v3/roles"), body);
       return response.data;
     }
 
@@ -1081,12 +1139,12 @@ async function handleTool(
       if (args.offset) params.offset = args.offset as number;
       if (args.filters) params.filters = args.filters as string;
 
-      const response = await api.get("/v3/certifications", { params });
+      const response = await api.get(apiPath("/v3/certifications"), { params });
       return response.data;
     }
 
     case "get_certification": {
-      const response = await api.get(`/v3/certifications/${args.id}`);
+      const response = await api.get(apiPath(`/v3/certifications/${args.id}`));
       return response.data;
     }
 
@@ -1097,12 +1155,12 @@ async function handleTool(
       if (args.filters) params.filters = args.filters as string;
       if (args.sorters) params.sorters = args.sorters as string;
 
-      const response = await api.get("/v3/campaigns", { params });
+      const response = await api.get(apiPath("/v3/campaigns"), { params });
       return response.data;
     }
 
     case "get_certification_campaign": {
-      const response = await api.get(`/v3/campaigns/${args.id}`);
+      const response = await api.get(apiPath(`/v3/campaigns/${args.id}`));
       return response.data;
     }
 
@@ -1112,12 +1170,12 @@ async function handleTool(
       if (args.limit) params.limit = args.limit as number;
       if (args.offset) params.offset = args.offset as number;
 
-      const response = await api.get("/v3/workflows", { params });
+      const response = await api.get(apiPath("/v3/workflows"), { params });
       return response.data;
     }
 
     case "get_workflow": {
-      const response = await api.get(`/v3/workflows/${args.id}`);
+      const response = await api.get(apiPath(`/v3/workflows/${args.id}`));
       return response.data;
     }
 
@@ -1127,14 +1185,14 @@ async function handleTool(
       if (args.offset) params.offset = args.offset as number;
 
       const response = await api.get(
-        `/v3/workflows/${args.workflowId}/executions`,
+        apiPath(`/v3/workflows/${args.workflowId}/executions`),
         { params }
       );
       return response.data;
     }
 
     case "test_workflow": {
-      const response = await api.post(`/v3/workflows/${args.workflowId}/test`, {
+      const response = await api.post(apiPath(`/v3/workflows/${args.workflowId}/test`), {
         input: args.input || {},
       });
       return response.data;
@@ -1148,12 +1206,12 @@ async function handleTool(
       if (args.filters) params.filters = args.filters as string;
       if (args.sorters) params.sorters = args.sorters as string;
 
-      const response = await api.get("/v3/sources", { params });
+      const response = await api.get(apiPath("/v3/sources"), { params });
       return response.data;
     }
 
     case "get_source": {
-      const response = await api.get(`/v3/sources/${args.id}`);
+      const response = await api.get(apiPath(`/v3/sources/${args.id}`));
       return response.data;
     }
 
@@ -1177,7 +1235,7 @@ async function handleTool(
       if (args.limit) params.limit = args.limit as number;
       params.count = true;
 
-      const response = await api.post("/v3/search", body, { params });
+      const response = await api.post(apiPath("/v3/search"), body, { params });
       return {
         results: response.data,
         totalCount: response.headers["x-total-count"],
@@ -1201,7 +1259,7 @@ async function handleTool(
         body.query = { query: args.query };
       }
 
-      const response = await api.post("/v3/search/aggregate", body);
+      const response = await api.post(apiPath("/v3/search/aggregate"), body);
       return response.data;
     }
 
@@ -1213,12 +1271,12 @@ async function handleTool(
       if (args.filters) params.filters = args.filters as string;
       if (args.sorters) params.sorters = args.sorters as string;
 
-      const response = await api.get("/v3/entitlements", { params });
+      const response = await api.get(apiPath("/v3/entitlements"), { params });
       return response.data;
     }
 
     case "get_entitlement": {
-      const response = await api.get(`/v3/entitlements/${args.id}`);
+      const response = await api.get(apiPath(`/v3/entitlements/${args.id}`));
       return response.data;
     }
 
@@ -1232,7 +1290,7 @@ async function handleTool(
       if (args.limit) params.limit = args.limit as number;
       if (args.offset) params.offset = args.offset as number;
 
-      const response = await api.get("/v3/access-requests", { params });
+      const response = await api.get(apiPath("/v3/access-requests"), { params });
       return response.data;
     }
 
@@ -1243,7 +1301,7 @@ async function handleTool(
         requestType: args.requestType || "GRANT_ACCESS",
       };
 
-      const response = await api.post("/v3/access-requests", body);
+      const response = await api.post(apiPath("/v3/access-requests"), body);
       return response.data;
     }
 
@@ -1255,12 +1313,12 @@ async function handleTool(
       if (args.filters) params.filters = args.filters as string;
       if (args.sorters) params.sorters = args.sorters as string;
 
-      const response = await api.get("/v3/identity-profiles", { params });
+      const response = await api.get(apiPath("/v3/identity-profiles"), { params });
       return response.data;
     }
 
     case "get_identity_profile": {
-      const response = await api.get(`/v3/identity-profiles/${args.id}`);
+      const response = await api.get(apiPath(`/v3/identity-profiles/${args.id}`));
       return response.data;
     }
 
@@ -1271,12 +1329,12 @@ async function handleTool(
       if (args.offset) params.offset = args.offset as number;
       if (args.filters) params.filters = args.filters as string;
 
-      const response = await api.get("/v3/sod-policies", { params });
+      const response = await api.get(apiPath("/v3/sod-policies"), { params });
       return response.data;
     }
 
     case "get_sod_policy": {
-      const response = await api.get(`/v3/sod-policies/${args.id}`);
+      const response = await api.get(apiPath(`/v3/sod-policies/${args.id}`));
       return response.data;
     }
 
@@ -1285,7 +1343,7 @@ async function handleTool(
       if (args.limit) params.limit = args.limit as number;
       if (args.offset) params.offset = args.offset as number;
 
-      const response = await api.get("/v3/sod-violations/predicted", { params });
+      const response = await api.get(apiPath("/v3/sod-violations/predicted"), { params });
       return response.data;
     }
 
@@ -1296,30 +1354,18 @@ async function handleTool(
 
 // Main server setup
 async function main() {
-  // Validate configuration
-  if (!SAILPOINT_BASE_URL) {
-    console.error(
-      "Error: SAILPOINT_BASE_URL environment variable is required"
-    );
-    console.error(
-      "Set it to your tenant API URL, e.g., https://acme.api.identitynow.com"
-    );
-    process.exit(1);
-  }
-  if (!SAILPOINT_CLIENT_ID || !SAILPOINT_CLIENT_SECRET) {
-    console.error(
-      "Error: SAILPOINT_CLIENT_ID and SAILPOINT_CLIENT_SECRET are required"
-    );
-    console.error(
-      "Generate a Personal Access Token from your SailPoint tenant preferences"
-    );
-    process.exit(1);
+  // Log startup info but don't validate credentials yet - allow graceful startup
+  const hasCredentials = SAILPOINT_BASE_URL && SAILPOINT_CLIENT_ID && SAILPOINT_CLIENT_SECRET;
+  if (!hasCredentials) {
+    console.error("Warning: SailPoint credentials not configured. Set SAILPOINT_BASE_URL, SAILPOINT_CLIENT_ID, and SAILPOINT_CLIENT_SECRET environment variables.");
+  } else {
+    console.error("SailPoint MCP Server initialized for:", SAILPOINT_BASE_URL);
   }
 
   const server = new Server(
     {
       name: "sailpoint-mcp",
-      version: "1.0.0",
+      version: "1.1.0",
     },
     {
       capabilities: {

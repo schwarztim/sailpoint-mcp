@@ -22,7 +22,24 @@ Set the following environment variables:
 SAILPOINT_BASE_URL=https://your-tenant.api.identitynow.com
 SAILPOINT_CLIENT_ID=your-client-id
 SAILPOINT_CLIENT_SECRET=your-client-secret
+SAILPOINT_API_VERSION=v3  # Optional: v3 (default) or v2025
 ```
+
+### API Version Support
+
+The server supports both SailPoint API versions:
+- **v3** (default): Stable, widely-supported API version
+- **v2025**: Latest API version with new features like Configuration Hub, enhanced identity management, and experimental endpoints
+
+To use v2025 APIs, set `SAILPOINT_API_VERSION=v2025`. The v2025 API includes:
+- Configuration Hub for automated configuration deployment
+- Enhanced identity deletion capabilities
+- Machine account management
+- Data segmentation and access security
+- Advanced IAI features (outliers, role mining, common access)
+- Non-employee lifecycle management
+
+For more information, see [SailPoint API v2025 Documentation](https://developer.sailpoint.com/docs/api/v2025/)
 
 ### Getting Credentials
 
@@ -133,6 +150,20 @@ Your base URL follows the format: `https://{tenant}.api.identitynow.com`
 npm install
 npm run build
 ```
+
+## Performance Features
+
+### HTTP Connection Pooling
+The server uses a singleton axios instance with HTTP Keep-Alive for optimal performance:
+- Reuses TCP connections across multiple requests
+- Connection pool: 50 max sockets, 10 max free sockets
+- 30-second keep-alive timeout
+- Automatic token refresh without creating new connections
+
+This provides significant performance improvements for sequential API calls, especially when making multiple requests in a short time period.
+
+### Token Caching
+OAuth2 tokens are cached with a 60-second buffer before expiry, minimizing unnecessary token refresh requests.
 
 ## License
 
